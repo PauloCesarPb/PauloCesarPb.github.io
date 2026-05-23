@@ -1,12 +1,11 @@
 let resultados = [];
+let configuracionActivaRevision = null;
 let indicePreviewActual = 0;
 let cvCargado = false;
 
-// Fotos/cartillas guardadas automáticamente por la cámara en vivo
 let cartillasCapturadas = [];
 let cartillasProcesadasPDF = [];
 
-// Variables del escáner automático
 let streamCamara = null;
 let escaneoActivo = false;
 let rafEscaneo = null;
@@ -23,31 +22,15 @@ const ANCHO_OBJETIVO = 1224;
 const ALTO_OBJETIVO = 1584;
 
 const MARCAS_OBJETIVO = {
-  /*
-    Coordenadas objetivo tomadas de la plantilla oficial ZipGrade 100 preguntas.
-    Se usan las esquinas/cuadrados negros principales para enderezar la hoja.
-  */
+  
   superiorIzquierdo: { x: 0.118873, y: 0.099116 },
   superiorDerecho: { x: 0.905637, y: 0.099116 },
   inferiorIzquierdo: { x: 0.118873, y: 0.918245 },
   inferiorDerecho: { x: 0.905637, y: 0.918245 }
 };
 
-/*
-  PLANTILLA BASE POR TRAMOS DE 10 PREGUNTAS
-
-  xA = centro aproximado de la alternativa A
-  xE = centro aproximado de la alternativa E
-  yPrimera = centro aproximado de la primera pregunta del tramo
-  yUltima = centro aproximado de la última pregunta del tramo
-
-  Esta plantilla se ajusta con los cuadraditos internos detectados.
-*/
 const PLANTILLA_TRAMOS_BASE = [
-  /*
-    Coordenadas normalizadas desde zipgrade100questionv2.pdf.
-    Esta versión deja de usar posiciones aproximadas a ojo.
-  */
+  
   { id: "T1",  inicio: 1,  fin: 10,  xA: 0.253431, xE: 0.358742, yPrimera: 0.428157, yUltima: 0.641288 },
   { id: "T2",  inicio: 11, fin: 20,  xA: 0.253431, xE: 0.358742, yPrimera: 0.678157, yUltima: 0.892424 },
 
@@ -63,21 +46,8 @@ const PLANTILLA_TRAMOS_BASE = [
   { id: "T10", inicio: 91, fin: 100, xA: 0.757925, xE: 0.864624, yPrimera: 0.677652, yUltima: 0.892298 }
 ];
 
-/*
-  CUADRADITOS INTERNOS ESPERADOS
-
-  NO se buscan cuadrados en toda la hoja.
-  Solo se buscan dentro de ventanitas proporcionales donde sabemos
-  que la plantilla ZipGrade tiene un cuadrado negro guía.
-
-  guiaX / guiaY = posición aproximada del cuadradito.
-  rx / ry = tamaño de la ventana de búsqueda.
-*/
 const GUIAS_INTERNAS_ESPERADAS = [
-  /*
-    Cuadraditos internos esperados en la plantilla oficial ZipGrade 100.
-    Se buscan solo en ventanas pequeñas para no confundir textos o manchas.
-  */
+  
   { id: "G_T5",  tramo: "T5",  x: 0.560458, y: 0.157513, rx: 0.025, ry: 0.018 },
   { id: "G_T8",  tramo: "T8",  x: 0.727941, y: 0.158144, rx: 0.025, ry: 0.018 },
 
@@ -113,6 +83,99 @@ function opencvListo() {
   }, 1500);
 }
 
+function abrirSelectorFotos() {
+  const input = document.getElementById("cartillas");
+  if (input) input.click();
+}
+
+function abrirCamaraCelularRapida() {
+  const input = document.getElementById("fotoCamaraInput");
+  if (input) input.click();
+}
+
+function recibirFotoCamaraRapida(event) {
+  const archivos = Array.from(event.target.files || []);
+
+  archivos.forEach((archivo) => {
+    const numero = cartillasCapturadas.length + 1;
+    const extension = archivo.type && archivo.type.includes("png") ? "png" : "jpg";
+    const nombre = `foto_camara_${String(numero).padStart(3, "0")}.${extension}`;
+
+    const nuevoArchivo = new File(
+      [archivo],
+      nombre,
+      { type: archivo.type || "image/jpeg" }
+    );
+
+    cartillasCapturadas.push(nuevoArchivo);
+  });
+
+  event.target.value = "";
+
+  mostrarVistaPrevia();
+  actualizarContadorFotosSeleccionadas();
+
+  const estado = document.getElementById("estado");
+  if (estado && archivos.length > 0) {
+    estado.textContent = `Foto agregada. Total de fotos: ${obtenerArchivosCartillas().length}`;
+  }
+}
+
+function eliminarFotoActual() {
+  const archivos = obtenerArchivosCartillas();
+
+  if (!archivos || archivos.length === 0) {
+    return;
+  }
+
+  const confirmar = confirm(`¿Eliminar la foto ${indicePreviewActual + 1} de ${archivos.length}?`);
+  if (!confirmar) return;
+
+  
+  const input = document.getElementById("cartillas");
+  const totalInput = input && input.files ? input.files.length : 0;
+
+  if (indicePreviewActual < totalInput && input && input.files) {
+    const dt = new DataTransfer();
+
+    Array.from(input.files).forEach((archivo, idx) => {
+      if (idx !== indicePreviewActual) {
+        dt.items.add(archivo);
+      }
+    });
+
+    input.files = dt.files;
+  } else {
+    const idxCapturada = indicePreviewActual - totalInput;
+
+    if (idxCapturada >= 0 && idxCapturada < cartillasCapturadas.length) {
+      cartillasCapturadas.splice(idxCapturada, 1);
+    }
+  }
+
+  const nuevosArchivos = obtenerArchivosCartillas();
+
+  if (indicePreviewActual >= nuevosArchivos.length) {
+    indicePreviewActual = Math.max(0, nuevosArchivos.length - 1);
+  }
+
+  mostrarVistaPrevia();
+  actualizarContadorFotosSeleccionadas();
+}
+
+function quitarUltimaFoto() {
+  const input = document.getElementById("cartillas");
+
+  if (cartillasCapturadas.length > 0) {
+    cartillasCapturadas.pop();
+  } else if (input && input.files && input.files.length > 0) {
+    input.value = "";
+  }
+
+  mostrarVistaPrevia();
+  actualizarContadorFotosSeleccionadas();
+}
+
 function obtenerArchivosCartillas() {
   const inputCartillas = document.getElementById("cartillas");
 
@@ -133,14 +196,6 @@ function actualizarContadorEscaneo() {
   }
 }
 
-
-
-/*
-  =========================================================
-  NAVEGACIÓN DE FOTOS SELECCIONADAS
-  =========================================================
-  Permite revisar las fotos seleccionadas con flecha izquierda/derecha.
-*/
 function mostrarImagenPreviewIndice() {
   const archivos = obtenerArchivosCartillas();
   const preview = document.querySelector(".preview");
@@ -204,7 +259,6 @@ function cambiarPreviewFoto(direccion) {
   mostrarImagenPreviewIndice();
 }
 
-
 function mostrarVistaPrevia() {
   const archivos = obtenerArchivosCartillas();
   const listaArchivos = document.getElementById("listaArchivos");
@@ -262,6 +316,10 @@ async function detectarCuadradosPrimeraImagen() {
     return;
   }
 
+  if (!validarAntesDeProcesar()) {
+    return;
+  }
+
   const archivos = obtenerArchivosCartillas();
 
   if (archivos.length === 0) {
@@ -307,11 +365,7 @@ async function detectarCuadradosPrimeraImagen() {
 
   const matAlineado = cv.imread(canvasAlineado);
 
-  /*
-    Segunda calibración:
-    con la plantilla ya guiada por cuadraditos internos,
-    buscamos círculos reales cercanos y corregimos cada tramo.
-  */
+  
   plantillaAjustada = calibrarPlantillaConCirculos(
     matAlineado,
     canvasAlineado.width,
@@ -567,9 +621,6 @@ function enderezarMatEnCanvas(src, esquinas, canvasDestino) {
   dst.delete();
 }
 
-/*
-  Busca cuadraditos internos dentro de zonas esperadas.
-*/
 function detectarGuiasInternas(canvas) {
   let guias = {};
 
@@ -702,12 +753,6 @@ function buscarGuiaInterna(canvas, guia) {
   return candidatos[0];
 }
 
-/*
-  Usa los cuadraditos internos para ajustar la plantilla:
-  - mueve xA/xE usando el desplazamiento horizontal del cuadrado,
-  - mueve yPrimera/yUltima usando el desplazamiento vertical del cuadrado,
-  - conserva el alto del tramo para no deformar demasiado.
-*/
 function ajustarPlantillaConGuias(guias) {
   return PLANTILLA_TRAMOS_BASE.map(base => {
     const ajustado = { ...base };
@@ -717,9 +762,6 @@ function ajustarPlantillaConGuias(guias) {
 
     const guiaDetectada = guias[guiaEsperada.id];
     if (!guiaDetectada) return ajustado;
-
-    const dx = guiaDetectada.cx / ANCHO_OBJETIVO - guiaEsperada.x;
-    const dy = guiaDetectada.cy / ALTO_OBJETIVO - guiaEsperada.y;
 
     const anchoTramo = base.xE - base.xA;
     const altoTramo = base.yUltima - base.yPrimera;
@@ -733,15 +775,16 @@ function ajustarPlantillaConGuias(guias) {
     ajustado.yPrimera = guiaDetectada.cy / ALTO_OBJETIVO + offsetYPrimera;
     ajustado.yUltima = ajustado.yPrimera + altoTramo;
 
-    // Suavizado para evitar saltos excesivos si detecta mal un cuadrado.
-    ajustado.xA = base.xA + (ajustado.xA - base.xA) * 0.75;
-    ajustado.xE = base.xE + (ajustado.xE - base.xE) * 0.75;
-    ajustado.yPrimera = base.yPrimera + (ajustado.yPrimera - base.yPrimera) * 0.75;
-    ajustado.yUltima = base.yUltima + (ajustado.yUltima - base.yUltima) * 0.75;
+    ajustado.xA = base.xA + (ajustado.xA - base.xA) * 0.95;
+    ajustado.xE = base.xE + (ajustado.xE - base.xE) * 0.95;
+    ajustado.yPrimera = base.yPrimera + (ajustado.yPrimera - base.yPrimera) * 0.95;
+    ajustado.yUltima = base.yUltima + (ajustado.yUltima - base.yUltima) * 0.95;
 
     return ajustado;
   });
 }
+
+
 
 function dibujarGuiasInternas(canvas, guias) {
   const ctx = canvas.getContext("2d");
@@ -762,7 +805,6 @@ function dibujarGuiasInternas(canvas, guias) {
   });
 }
 
-
 function mediana(valores) {
   if (!valores || valores.length === 0) return 0;
 
@@ -780,22 +822,10 @@ function limitar(valor, minimo, maximo) {
   return Math.max(minimo, Math.min(maximo, valor));
 }
 
-/*
-  AUTO-CALIBRACIÓN POR CÍRCULOS
-
-  Esta función usa la plantilla ajustada con cuadraditos internos
-  y luego busca círculos reales cercanos en cada tramo.
-
-  Para cada tramo:
-  - toma varios círculos detectados,
-  - calcula cuánto se movieron respecto a la plantilla,
-  - corrige xA, xE, yPrimera y yUltima,
-  - usa mediana para que manchas raras no arruinen el ajuste.
-*/
 function calibrarPlantillaConCirculos(mat, ancho, alto, totalPreguntas, plantilla) {
   const opciones = document.getElementById("alternativas").value.split("");
-  const maxCorrX = 0.012;
-  const maxCorrY = 0.020;
+  const maxCorrX = 0.026;
+  const maxCorrY = 0.032;
 
   return plantilla.map(tramo => {
     const ajustado = { ...tramo };
@@ -840,20 +870,18 @@ function calibrarPlantillaConCirculos(mat, ancho, alto, totalPreguntas, plantill
       }
     }
 
-    /*
-      Si no hay suficientes círculos detectados, dejamos el tramo como estaba.
-      Esto evita que una mala detección mueva todo el bloque.
-    */
-    if (muestras.length < 6) {
+    if (muestras.length < 4) {
       return ajustado;
     }
 
     const totalFilas = fin - inicio;
 
     const muestrasIzquierda = muestras.filter(m => m.col <= 1);
+    const muestrasCentro = muestras.filter(m => m.col >= 1 && m.col <= opciones.length - 2);
     const muestrasDerecha = muestras.filter(m => m.col >= opciones.length - 2);
 
     const muestrasArriba = muestras.filter(m => m.fila <= Math.min(2, totalFilas));
+    const muestrasMedio = muestras.filter(m => m.fila > 2 && m.fila < Math.max(0, totalFilas - 2));
     const muestrasAbajo = muestras.filter(m => m.fila >= Math.max(0, totalFilas - 2));
 
     const dxGlobal = mediana(muestras.map(m => m.dx));
@@ -864,20 +892,32 @@ function calibrarPlantillaConCirculos(mat, ancho, alto, totalPreguntas, plantill
     let dyPrimera = dyGlobal;
     let dyUltima = dyGlobal;
 
-    if (muestrasIzquierda.length >= 3) {
+    if (muestrasIzquierda.length >= 2) {
       dxA = mediana(muestrasIzquierda.map(m => m.dx));
     }
 
-    if (muestrasDerecha.length >= 3) {
+    if (muestrasDerecha.length >= 2) {
       dxE = mediana(muestrasDerecha.map(m => m.dx));
     }
 
-    if (muestrasArriba.length >= 3) {
+    if (muestrasCentro.length >= 3) {
+      const dxCentro = mediana(muestrasCentro.map(m => m.dx));
+      dxA = dxA * 0.75 + dxCentro * 0.25;
+      dxE = dxE * 0.75 + dxCentro * 0.25;
+    }
+
+    if (muestrasArriba.length >= 2) {
       dyPrimera = mediana(muestrasArriba.map(m => m.dy));
     }
 
-    if (muestrasAbajo.length >= 3) {
+    if (muestrasAbajo.length >= 2) {
       dyUltima = mediana(muestrasAbajo.map(m => m.dy));
+    }
+
+    if (muestrasMedio.length >= 3) {
+      const dyMedio = mediana(muestrasMedio.map(m => m.dy));
+      dyPrimera = dyPrimera * 0.80 + dyMedio * 0.20;
+      dyUltima = dyUltima * 0.80 + dyMedio * 0.20;
     }
 
     dxA = limitar(dxA, -maxCorrX, maxCorrX);
@@ -885,11 +925,7 @@ function calibrarPlantillaConCirculos(mat, ancho, alto, totalPreguntas, plantill
     dyPrimera = limitar(dyPrimera, -maxCorrY, maxCorrY);
     dyUltima = limitar(dyUltima, -maxCorrY, maxCorrY);
 
-    /*
-      Suavizado.
-      0.85 es fuerte pero todavía evita saltos bruscos.
-    */
-    const k = 0.85;
+    const k = 1.0;
 
     ajustado.xA = tramo.xA + dxA * k;
     ajustado.xE = tramo.xE + dxE * k;
@@ -899,6 +935,7 @@ function calibrarPlantillaConCirculos(mat, ancho, alto, totalPreguntas, plantill
     return ajustado;
   });
 }
+
 
 
 function obtenerCentrosPreguntaAproximados(numeroPregunta, ancho, alto, cantidadOpciones, plantilla) {
@@ -933,21 +970,8 @@ function obtenerCentrosPreguntaAproximados(numeroPregunta, ancho, alto, cantidad
 }
 
 function ajustarCentroBurbuja(mat, xAprox, yAprox) {
-  /*
-    DETECCIÓN LOCAL DEL CÍRCULO MÁS CERCANO
-
-    Esta función busca el círculo real alrededor del punto aproximado.
-    No busca en toda la hoja; solo en una ventana pequeña.
-
-    Reglas:
-    - Si encuentra un círculo cercano, mueve el centro hacia ese círculo.
-    - Si el círculo está demasiado lejos, no lo usa.
-    - Si no detecta círculo, usa el punto aproximado.
-    - Así evitamos que la lectura se vaya hacia manchas del lápiz o texto.
-  */
-
-  const radioBusqueda = 22;
-  const movimientoMaximoPermitido = 8.5;
+  const radioBusqueda = 34;
+  const movimientoMaximoPermitido = 16.5;
 
   const x0 = Math.max(0, Math.round(xAprox - radioBusqueda));
   const y0 = Math.max(0, Math.round(yAprox - radioBusqueda));
@@ -977,10 +1001,6 @@ function ajustarCentroBurbuja(mat, xAprox, yAprox) {
 
   let candidatos = [];
 
-  /*
-    Método 1: HoughCircles.
-    Busca círculos reales aunque estén vacíos.
-  */
   if (typeof cv.HoughCircles === "function") {
     try {
       cv.HoughCircles(
@@ -988,11 +1008,11 @@ function ajustarCentroBurbuja(mat, xAprox, yAprox) {
         circles,
         cv.HOUGH_GRADIENT,
         1,
-        10,
-        75,
-        10,
+        9,
+        70,
+        8,
         6,
-        14
+        15
       );
 
       for (let i = 0; i < circles.cols; i++) {
@@ -1004,27 +1024,22 @@ function ajustarCentroBurbuja(mat, xAprox, yAprox) {
         const cy = y0 + y;
         const distancia = Math.hypot(cx - xAprox, cy - yAprox);
 
-        if (distancia <= movimientoMaximoPermitido && r >= 6 && r <= 14) {
+        if (distancia <= movimientoMaximoPermitido && r >= 6 && r <= 15) {
           candidatos.push({
             x: cx,
             y: cy,
             distancia,
             radio: r,
             metodo: "hough",
-            score: distancia
+            score: distancia * 0.85 + Math.abs(r - 10) * 0.25
           });
         }
       }
     } catch (e) {
-      // Si Hough falla en alguna versión de OpenCV.js, usamos contornos.
     }
   }
 
-  /*
-    Método 2: contornos con Canny.
-    Sirve como respaldo cuando Hough no encuentra círculos.
-  */
-  cv.Canny(blur, edges, 40, 110);
+  cv.Canny(blur, edges, 35, 105);
 
   cv.findContours(
     edges,
@@ -1052,14 +1067,14 @@ function ajustarCentroBurbuja(mat, xAprox, yAprox) {
     }
 
     if (
-      rect.width >= 10 &&
-      rect.width <= 30 &&
-      rect.height >= 10 &&
-      rect.height <= 30 &&
-      proporcion > 0.65 &&
-      proporcion < 1.45 &&
+      rect.width >= 9 &&
+      rect.width <= 32 &&
+      rect.height >= 9 &&
+      rect.height <= 32 &&
+      proporcion > 0.58 &&
+      proporcion < 1.58 &&
       distancia <= movimientoMaximoPermitido &&
-      circularidad > 0.25
+      circularidad > 0.20
     ) {
       candidatos.push({
         x: cx,
@@ -1067,18 +1082,13 @@ function ajustarCentroBurbuja(mat, xAprox, yAprox) {
         distancia,
         radio: Math.max(rect.width, rect.height) / 2,
         metodo: "contorno",
-        score: distancia + Math.abs(1 - proporcion) * 4
+        score: distancia + Math.abs(1 - proporcion) * 3.2 + Math.abs(10 - Math.max(rect.width, rect.height) / 2) * 0.2
       });
     }
 
     cnt.delete();
   }
 
-  /*
-    Método 3: cuando la burbuja está muy marcada, el contorno puede ser una mancha.
-    En ese caso NO usamos el centro de la mancha si se aleja mucho.
-    Solo usamos este método si queda muy cerca del punto aproximado.
-  */
   cv.threshold(
     blur,
     thresh,
@@ -1110,13 +1120,13 @@ function ajustarCentroBurbuja(mat, xAprox, yAprox) {
 
     if (
       rect.width >= 8 &&
-      rect.width <= 28 &&
+      rect.width <= 30 &&
       rect.height >= 8 &&
-      rect.height <= 28 &&
-      area >= 20 &&
-      proporcion > 0.55 &&
-      proporcion < 1.60 &&
-      distancia <= 4.5
+      rect.height <= 30 &&
+      area >= 18 &&
+      proporcion > 0.50 &&
+      proporcion < 1.70 &&
+      distancia <= 10.5
     ) {
       candidatos.push({
         x: cx,
@@ -1124,7 +1134,7 @@ function ajustarCentroBurbuja(mat, xAprox, yAprox) {
         distancia,
         radio: Math.max(rect.width, rect.height) / 2,
         metodo: "marca_cercana",
-        score: distancia + 3
+        score: distancia + 3.5
       });
     }
 
@@ -1158,6 +1168,8 @@ function ajustarCentroBurbuja(mat, xAprox, yAprox) {
     metodo: mejor.metodo
   };
 }
+
+
 
 function obtenerTodosLosCentrosAjustados(mat, ancho, alto, totalPreguntas, plantilla) {
   const opciones = document.getElementById("alternativas").value.split("");
@@ -1196,10 +1208,7 @@ function dibujarPuntosAzules(canvas, centros) {
   centros.forEach(c => {
     ctx.beginPath();
 
-    /*
-      Celeste = se detectó círculo local real.
-      Azul = se usó solo la plantilla porque no encontró círculo cercano.
-    */
+    
     ctx.fillStyle = c.ajustado ? "cyan" : "blue";
     ctx.arc(c.x, c.y, 2.7, 0, Math.PI * 2);
     ctx.fill();
@@ -1246,6 +1255,31 @@ async function obtenerImagenAlineada(archivo) {
   const claveCal = claveTextoCal.split(/\s+/).filter(x => x !== "");
   const totalPreguntasActual = claveCal.length || parseInt(document.getElementById("totalPreguntas").value) || 90;
 
+  
+  plantillaAjustada = calibrarPlantillaConCirculos(
+    matCalibracion,
+    canvasAlineado.width,
+    canvasAlineado.height,
+    totalPreguntasActual,
+    plantillaAjustada
+  );
+
+  plantillaAjustada = calibrarPlantillaConCirculos(
+    matCalibracion,
+    canvasAlineado.width,
+    canvasAlineado.height,
+    totalPreguntasActual,
+    plantillaAjustada
+  );
+
+  plantillaAjustada = calibrarPlantillaConCirculos(
+    matCalibracion,
+    canvasAlineado.width,
+    canvasAlineado.height,
+    totalPreguntasActual,
+    plantillaAjustada
+  );
+
   plantillaAjustada = calibrarPlantillaConCirculos(
     matCalibracion,
     canvasAlineado.width,
@@ -1284,12 +1318,7 @@ async function procesarCartillas() {
   const claveTexto = document.getElementById("clave").value.trim().toUpperCase();
   const clave = claveTexto.split(/\s+/).filter(x => x !== "");
 
-  /*
-    IMPORTANTE:
-    La cantidad real de preguntas se toma automáticamente desde la clave.
-    Así funciona para simulacros de 90, 100 u otra cantidad, sin que aparezca
-    el error de "debe tener 100 respuestas".
-  */
+  
   if (clave.length > 0) {
     totalPreguntas = clave.length;
     const inputTotal = document.getElementById("totalPreguntas");
@@ -1346,13 +1375,15 @@ async function procesarCartillas() {
         true
       );
 
-      /*
-        Guardamos la imagen YA PROCESADA, con puntos y corrección encima,
-        para descargarla luego en PDF como evidencia de lectura.
-      */
+      
+      
+      const zonaNombreAlumno = recortarZonaNombreAlumno(imagenAlineada.canvas);
+      dibujarMarcoNombreEnCartilla(imagenAlineada.canvas, zonaNombreAlumno);
+
       cartillasProcesadasPDF.push({
         orden: i + 1,
         nombre: archivos[i].name,
+        recorteNombre: zonaNombreAlumno.dataUrl,
         dataUrl: imagenAlineada.canvas.toDataURL("image/jpeg", 0.90)
       });
 
@@ -1471,25 +1502,26 @@ function leerRespuestasDesdeImagenAlineada(imagen, totalPreguntas, clave, dibuja
 }
 
 function calcularOscuridadInterior(data, ancho, alto, cx, cy) {
-  /*
-    PUNTAJE NORMALIZADO
+  
 
-    Compara el interior de la burbuja con un anillo exterior.
-    Esto ayuda a no confundir:
-    - burbuja vacía: borde oscuro, centro claro
-    - burbuja marcada: centro oscuro
-  */
-
-  const rInterior = 6;
-  const rAnilloMin = 9;
-  const rAnilloMax = 13;
+  const rInterior = 7;
+  const rAnilloMin = 10;
+  const rAnilloMax = 14;
 
   let totalInterior = 0;
   let sumaInterior = 0;
   let pixelesOscurosInterior = 0;
+  let pixelesMuyOscurosInterior = 0;
 
   let totalAnillo = 0;
   let sumaAnillo = 0;
+
+  const cuadrantes = [
+    { total: 0, oscuros: 0 },
+    { total: 0, oscuros: 0 },
+    { total: 0, oscuros: 0 },
+    { total: 0, oscuros: 0 }
+  ];
 
   const centroX = Math.round(cx);
   const centroY = Math.round(cy);
@@ -1513,16 +1545,27 @@ function calcularOscuridadInterior(data, ancho, alto, cx, cy) {
       const oscuridad = Math.max(0, (245 - luminancia) / 245);
 
       if (d2 <= rInterior * rInterior) {
+        totalInterior++;
         sumaInterior += oscuridad;
 
-        if (luminancia < 190) {
-          pixelesOscurosInterior++;
-        }
+        const esOscuro = luminancia < 185;
+        const esMuyOscuro = luminancia < 145;
 
-        totalInterior++;
-      } else if (d2 >= rAnilloMin * rAnilloMin && d2 <= rAnilloMax * rAnilloMax) {
-        sumaAnillo += oscuridad;
+        if (esOscuro) pixelesOscurosInterior++;
+        if (esMuyOscuro) pixelesMuyOscurosInterior++;
+
+        let q = 0;
+        if (x >= 0 && y < 0) q = 1;
+        if (x < 0 && y >= 0) q = 2;
+        if (x >= 0 && y >= 0) q = 3;
+
+        cuadrantes[q].total++;
+        if (esOscuro) cuadrantes[q].oscuros++;
+      }
+
+      if (d2 >= rAnilloMin * rAnilloMin && d2 <= rAnilloMax * rAnilloMax) {
         totalAnillo++;
+        sumaAnillo += oscuridad;
       }
     }
   }
@@ -1530,28 +1573,69 @@ function calcularOscuridadInterior(data, ancho, alto, cx, cy) {
   if (totalInterior === 0) return 0;
 
   const promedioInterior = sumaInterior / totalInterior;
-  const proporcionOscuraInterior = pixelesOscurosInterior / totalInterior;
+  const proporcionOscura = pixelesOscurosInterior / totalInterior;
+  const proporcionMuyOscura = pixelesMuyOscurosInterior / totalInterior;
   const promedioAnillo = totalAnillo > 0 ? sumaAnillo / totalAnillo : 0;
 
-  /*
-    El interior manda.
-    El anillo resta un poco para que el borde de una burbuja vacía no parezca marca.
-  */
+  const proporcionesCuadrantes = cuadrantes.map(q => {
+    return q.total > 0 ? q.oscuros / q.total : 0;
+  });
+
+  const cuadrantesConMarca = proporcionesCuadrantes.filter(v => v >= 0.16).length;
+  const promedioCuadrantes =
+    proporcionesCuadrantes.reduce((a, b) => a + b, 0) / proporcionesCuadrantes.length;
+  const minCuadrante = Math.min(...proporcionesCuadrantes);
+  const maxCuadrante = Math.max(...proporcionesCuadrantes);
+
+  
+  let uniformidad = 0;
+
+  if (promedioCuadrantes > 0) {
+    uniformidad = Math.min(1, minCuadrante / (promedioCuadrantes * 0.70));
+  }
+
+  
+  const desbalance = maxCuadrante - minCuadrante;
+
   let puntaje =
-    promedioInterior * 0.55 +
-    proporcionOscuraInterior * 0.55 -
-    promedioAnillo * 0.15;
+    promedioInterior * 0.34 +
+    proporcionOscura * 0.34 +
+    proporcionMuyOscura * 0.12 +
+    uniformidad * 0.28 -
+    promedioAnillo * 0.12;
+
+  
+
+  
+  if (proporcionOscura < 0.20) {
+    puntaje = Math.min(puntaje, 0.055);
+  }
+
+  
+  if (cuadrantesConMarca <= 1) {
+    puntaje = Math.min(puntaje, 0.050);
+  }
+
+  
+  if (cuadrantesConMarca === 2 && proporcionOscura < 0.30) {
+    puntaje = Math.min(puntaje, 0.070);
+  }
+
+  
+  if (desbalance > 0.55 && uniformidad < 0.45) {
+    puntaje = Math.min(puntaje, 0.075);
+  }
+
+  
+  if (promedioInterior < 0.18 && proporcionMuyOscura < 0.08) {
+    puntaje = Math.min(puntaje, 0.070);
+  }
 
   return Math.max(0, Math.min(1, puntaje));
 }
 
-function elegirRespuestaMejorada(puntajes, opciones) {
-  /*
-    Criterio de decisión:
-    - Si todo está casi blanco, devuelve "?".
-    - Si hay dos alternativas prácticamente iguales y muy marcadas, devuelve "?".
-    - Si una destaca aunque sea moderadamente, la acepta.
-  */
+function analizarRespuestaMejorada(puntajes, opciones) {
+  
 
   const pares = puntajes.map((valor, indice) => ({
     valor,
@@ -1574,32 +1658,66 @@ function elegirRespuestaMejorada(puntajes, opciones) {
 
   const ventajaSobrePromedio = max - promedioOtros;
 
-  if (max < 0.045) {
-    return "?";
+  
+  if (max < 0.115) {
+    return {
+      respuesta: "?",
+      motivo: "sombreado insuficiente",
+      opcionSospechosa: primero.opcion,
+      puntaje: max
+    };
   }
 
-  /*
-    Marca muy débil: solo aceptamos si destaca claramente.
-  */
-  if (max < 0.10 && ventajaSobrePromedio < 0.018) {
-    return "?";
+  
+  if (max < 0.175 && ventajaSobrePromedio < 0.050) {
+    return {
+      respuesta: "?",
+      motivo: "marca débil o parcial",
+      opcionSospechosa: primero.opcion,
+      puntaje: max
+    };
   }
 
-  /*
-    Posible doble marca.
-  */
-  if (max >= 0.18 && ratioSegundo > 0.94 && diff < 0.018) {
-    return "?";
+  
+  if (diff < 0.022 && ratioSegundo > 0.82) {
+    return {
+      respuesta: "?",
+      motivo: `duda entre ${primero.opcion} y ${segundo.opcion}`,
+      opcionSospechosa: `${primero.opcion}/${segundo.opcion}`,
+      puntaje: max
+    };
   }
 
-  /*
-    Cuando las 5 alternativas están parecidas, no inventar.
-  */
-  if (max < 0.16 && diff < 0.010 && ventajaSobrePromedio < 0.025) {
-    return "?";
+  
+  if (max >= 0.18 && ratioSegundo > 0.88 && diff < 0.035) {
+    return {
+      respuesta: "?",
+      motivo: `posible doble marca ${primero.opcion}/${segundo.opcion}`,
+      opcionSospechosa: `${primero.opcion}/${segundo.opcion}`,
+      puntaje: max
+    };
   }
 
-  return primero.opcion;
+  
+  if (max < 0.22 && ventajaSobrePromedio < 0.045) {
+    return {
+      respuesta: "?",
+      motivo: "marca no destaca claramente",
+      opcionSospechosa: primero.opcion,
+      puntaje: max
+    };
+  }
+
+  return {
+    respuesta: primero.opcion,
+    motivo: "",
+    opcionSospechosa: primero.opcion,
+    puntaje: max
+  };
+}
+
+function elegirRespuestaMejorada(puntajes, opciones) {
+  return analizarRespuestaMejorada(puntajes, opciones).respuesta;
 }
 
 function dibujarCorreccionVisual(canvas, detalles) {
@@ -1657,6 +1775,53 @@ function dibujarCorreccionVisual(canvas, detalles) {
   });
 }
 
+function recortarZonaNombreAlumno(canvasAlineado) {
+  const ancho = canvasAlineado.width;
+  const alto = canvasAlineado.height;
+
+  
+  
+  const xRatio = 0.155;
+  const yRatio = 0.088;
+  const wRatio = 0.565;
+  const hRatio = 0.052;
+
+  const x = Math.round(ancho * xRatio);
+  const y = Math.round(alto * yRatio);
+  const w = Math.round(ancho * wRatio);
+  const h = Math.round(alto * hRatio);
+
+  const crop = document.createElement("canvas");
+  crop.width = w;
+  crop.height = h;
+
+  const ctx = crop.getContext("2d");
+  ctx.drawImage(canvasAlineado, x, y, w, h, 0, 0, w, h);
+
+  return {
+    dataUrl: crop.toDataURL("image/jpeg", 0.92),
+    x,
+    y,
+    w,
+    h
+  };
+}
+
+function dibujarMarcoNombreEnCartilla(canvasAlineado, zonaNombre) {
+  const ctx = canvasAlineado.getContext("2d");
+
+  ctx.save();
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "orange";
+  ctx.fillStyle = "orange";
+  ctx.font = "bold 16px Arial";
+
+  ctx.strokeRect(zonaNombre.x, zonaNombre.y, zonaNombre.w, zonaNombre.h);
+  ctx.fillText("Zona nombre", zonaNombre.x, Math.max(18, zonaNombre.y - 6));
+
+  ctx.restore();
+}
+
 function corregirCartilla({ orden, nombreCartilla, clave, respuestas, tamanoGrupo, blancas }) {
   let totalBuenas = 0;
   let totalMalas = 0;
@@ -1695,12 +1860,6 @@ function corregirCartilla({ orden, nombreCartilla, clave, respuestas, tamanoGrup
 }
 
 
-
-/*
-  Nombres de grupos / cursos
-  Puedes escribirlos uno por línea o separados por coma.
-  Si dejas vacío, se usará G1, G2, G3...
-*/
 function obtenerNombresGrupos(cantidadGrupos) {
   const campo = document.getElementById("nombresGrupos");
 
@@ -1758,6 +1917,36 @@ function actualizarInfoClaveYGrupos() {
   info.textContent = `Clave detectada: ${total} respuestas. Se crearán ${grupos} grupos de 5 preguntas.`;
 }
 
+function validarAntesDeProcesar() {
+  if (!configuracionActivaRevision) {
+    alert("Primero elige un grupo.");
+    return false;
+  }
+
+  const archivos = obtenerArchivosCartillas();
+
+  if (!archivos || archivos.length === 0) {
+    alert("Primero selecciona las fotos de las cartillas.");
+    return false;
+  }
+
+  const claveTexto = document.getElementById("clave").value.trim().toUpperCase();
+  const clave = claveTexto.split(/\s+/).filter(x => x !== "");
+
+  if (clave.length === 0) {
+    alert("No hay clave cargada para este grupo.");
+    return false;
+  }
+
+  const invalidas = clave.filter(x => !["A", "B", "C", "D", "E"].includes(x));
+
+  if (invalidas.length > 0) {
+    alert("La clave contiene respuestas inválidas. Comunica esto al encargado.");
+    return false;
+  }
+
+  return true;
+}
 
 function mostrarResultados(totalPreguntas, tamanoGrupo) {
   const thead = document.querySelector("#tablaResultados thead");
@@ -1820,14 +2009,22 @@ function mostrarRespuestasDetectadas() {
   cuadro.value = texto.trim();
 }
 
-function exportarExcel() {
+async function exportarExcel() {
+  
+
   if (resultados.length === 0) {
     alert("Primero debes leer las cartillas.");
     return;
   }
 
+  if (!window.ExcelJS) {
+    alert("No cargó la librería ExcelJS. Revisa conexión a internet o vuelve a abrir la página.");
+    return;
+  }
+
   const claveTexto = document.getElementById("clave").value.trim().toUpperCase();
   const clave = claveTexto.split(/\s+/).filter(x => x !== "");
+
   const totalPreguntas =
     resultados[0] && resultados[0].respuestas
       ? resultados[0].respuestas.length
@@ -1837,11 +2034,18 @@ function exportarExcel() {
   const cantidadGrupos = Math.ceil(totalPreguntas / tamanoGrupo);
   const nombresGrupos = obtenerNombresGrupos(cantidadGrupos);
 
-  let encabezados = [
-    "Orden",
-    "Buenas",
-    "Malas",
-    "Blancas"
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = "Corrector de Cartillas";
+  workbook.created = new Date();
+
+  const ws = workbook.addWorksheet("Resultados");
+
+  const encabezados = [
+    { header: "Orden", key: "orden", width: 10 },
+    { header: "Nombre escrito", key: "nombre", width: 42 },
+    { header: "Buenas", key: "buenas", width: 12 },
+    { header: "Malas", key: "malas", width: 12 },
+    { header: "Blancas", key: "blancas", width: 12 }
   ];
 
   for (let i = 1; i <= cantidadGrupos; i++) {
@@ -1849,40 +2053,88 @@ function exportarExcel() {
     const fin = Math.min(i * tamanoGrupo, totalPreguntas);
     const nombreGrupo = nombresGrupos[i - 1];
 
-    encabezados.push(`${nombreGrupo} (${inicio}-${fin})`);
+    encabezados.push({
+      header: `${nombreGrupo} (${inicio}-${fin})`,
+      key: `g${i}`,
+      width: 18
+    });
   }
 
-  let filas = [];
-  filas.push(encabezados);
+  ws.columns = encabezados;
 
-  resultados.forEach(item => {
-    let fila = [
-      item.orden,
-      item.totalBuenas,
-      item.totalMalas,
-      item.blancas
-    ];
+  ws.getRow(1).font = { bold: true };
+  ws.getRow(1).alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+  ws.getRow(1).height = 30;
 
-    item.grupos.forEach(valor => {
-      fila.push(valor);
+  resultados.forEach((item, index) => {
+    const filaData = {
+      orden: item.orden,
+      nombre: "",
+      buenas: item.totalBuenas,
+      malas: item.totalMalas,
+      blancas: item.blancas
+    };
+
+    item.grupos.forEach((valor, i) => {
+      filaData[`g${i + 1}`] = valor;
     });
 
-    filas.push(fila);
+    const row = ws.addRow(filaData);
+    const rowNumber = row.number;
+
+    row.height = 42;
+    row.alignment = { vertical: "middle", horizontal: "center" };
+
+    const itemPDF = cartillasProcesadasPDF.find(x => x.orden === item.orden);
+
+    if (itemPDF && itemPDF.recorteNombre) {
+      const imageId = workbook.addImage({
+        base64: itemPDF.recorteNombre,
+        extension: "jpeg"
+      });
+
+      
+      ws.addImage(imageId, {
+        tl: { col: 1.05, row: rowNumber - 0.92 },
+        ext: { width: 250, height: 34 }
+      });
+    } else {
+      ws.getCell(`B${rowNumber}`).value = "Sin recorte";
+    }
   });
 
-  const contenidoCSV = filas
-    .map(fila => fila.map(celda => `"${celda}"`).join(";"))
-    .join("\n");
+  
+  ws.eachRow(row => {
+    row.eachCell(cell => {
+      cell.border = {
+        top: { style: "thin" },
+        left: { style: "thin" },
+        bottom: { style: "thin" },
+        right: { style: "thin" }
+      };
 
-  const blob = new Blob([contenidoCSV], {
-    type: "text/csv;charset=utf-8;"
+      cell.alignment = {
+        vertical: "middle",
+        horizontal: "center",
+        wrapText: true
+      };
+    });
+  });
+
+  
+  ws.views = [{ state: "frozen", ySplit: 1 }];
+
+  const buffer = await workbook.xlsx.writeBuffer();
+
+  const blob = new Blob([buffer], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
   });
 
   const url = URL.createObjectURL(blob);
 
   const enlace = document.createElement("a");
   enlace.href = url;
-  enlace.download = "resultados_cartillas.csv";
+  enlace.download = `${obtenerNombreBaseExportacion()}_Resultados.xlsx`;
   enlace.click();
 
   URL.revokeObjectURL(url);
@@ -1919,15 +2171,6 @@ function limpiarCanvas(id) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
 }
 
-
-
-/*
-  =========================================================
-  PDF DE CARTILLAS ESCANEADAS
-  =========================================================
-  Descarga un solo PDF con una página por cada cartilla guardada
-  por el escáner automático. Sirve para revisar evidencia de escaneo.
-*/
 function fileToDataURL(archivo) {
   return new Promise((resolve, reject) => {
     const lector = new FileReader();
@@ -1955,13 +2198,7 @@ function cargarImagenDesdeDataURL(dataUrl) {
 }
 
 async function descargarPDFEscaneos() {
-  /*
-    PDF DE CARTILLAS PROCESADAS
-
-    Este PDF NO usa las fotos originales.
-    Usa las imágenes ya procesadas por la app, es decir,
-    con la cartilla enderezada, puntos detectados y marcas de corrección.
-  */
+  
 
   if (!cartillasProcesadasPDF || cartillasProcesadasPDF.length === 0) {
     alert("Primero presiona 'Leer cartillas'. Luego podrás descargar el PDF procesado.");
@@ -1984,9 +2221,15 @@ async function descargarPDFEscaneos() {
   const pageW = 210;
   const pageH = 297;
   const margen = 8;
-  const tituloH = 10;
+
+  const nombreBoxH = 24;
+  const tituloY = margen + 5;
+  const nombreTituloY = margen + 13;
+  const nombreImgY = margen + 16;
+  const cartillaY = margen + nombreBoxH + 12;
+
   const maxW = pageW - margen * 2;
-  const maxH = pageH - margen * 2 - tituloH;
+  const maxH = pageH - cartillaY - margen;
 
   for (let i = 0; i < cartillasProcesadasPDF.length; i++) {
     if (i > 0) {
@@ -1994,6 +2237,49 @@ async function descargarPDFEscaneos() {
     }
 
     const item = cartillasProcesadasPDF[i];
+
+    pdf.setFontSize(13);
+    pdf.text(`ORDEN ${String(item.orden).padStart(3, "0")}`, margen, tituloY);
+
+    if (configuracionActivaRevision) {
+      pdf.setFontSize(9);
+      pdf.text(
+        `${configuracionActivaRevision.simulacro || ""} - ${configuracionActivaRevision.grupo || ""}`,
+        margen + 38,
+        tituloY
+      );
+    }
+
+    const resultadoPDF = resultados.find(r => r.orden === item.orden);
+    if (resultadoPDF) {
+      pdf.setFontSize(9);
+      pdf.text(
+        `Buenas: ${resultadoPDF.totalBuenas} | Malas: ${resultadoPDF.totalMalas} | Blancas: ${resultadoPDF.blancas}`,
+        margen,
+        margen + 10
+      );
+    }
+
+    pdf.setFontSize(9);
+    pdf.text("Nombre escrito por el alumno:", margen, nombreTituloY);
+
+    if (item.recorteNombre) {
+      const imgNombre = await cargarImagenDesdeDataURL(item.recorteNombre);
+
+      let nombreW = 120;
+      let nombreH = (imgNombre.height * nombreW) / imgNombre.width;
+
+      if (nombreH > 18) {
+        nombreH = 18;
+        nombreW = (imgNombre.width * nombreH) / imgNombre.height;
+      }
+
+      pdf.addImage(item.recorteNombre, "JPEG", margen, nombreImgY, nombreW, nombreH);
+      pdf.rect(margen, nombreImgY, nombreW, nombreH);
+    } else {
+      pdf.text("[No se pudo recortar nombre]", margen, nombreImgY + 5);
+    }
+
     const dataUrl = item.dataUrl;
     const img = await cargarImagenDesdeDataURL(dataUrl);
 
@@ -2006,21 +2292,13 @@ async function descargarPDFEscaneos() {
     }
 
     const x = (pageW - imgW) / 2;
-    const y = margen + tituloH;
 
-    pdf.setFontSize(10);
-    pdf.text(`Orden ${item.orden} - Cartilla procesada: ${item.nombre}`, margen, margen + 5);
-
-    pdf.addImage(dataUrl, "JPEG", x, y, imgW, imgH);
+    pdf.addImage(dataUrl, "JPEG", x, cartillaY, imgW, imgH);
   }
 
-  pdf.save("cartillas_procesadas_corregidas.pdf");
+  pdf.save(`${obtenerNombreBaseExportacion()}_Cartillas_Procesadas.pdf`);
 }
 
-/*
-  Botón opcional:
-  lee todas las cartillas y luego descarga el Excel.
-*/
 async function leerYExportarExcel() {
   await procesarCartillas();
 
@@ -2029,15 +2307,6 @@ async function leerYExportarExcel() {
   }
 }
 
-
-
-/*
-  =========================================================
-  MODO RÁPIDO POR SELECCIÓN DE FOTOS
-  =========================================================
-  Este modo evita el escaneo en vivo. Tú tomas fotos normal con la cámara
-  del celular, luego las seleccionas todas en la app y se procesan juntas.
-*/
 function actualizarContadorFotosSeleccionadas() {
   const archivos = obtenerArchivosCartillas ? obtenerArchivosCartillas() : [];
   const contador = document.getElementById("contadorFotosSeleccionadas");
@@ -2045,45 +2314,6 @@ function actualizarContadorFotosSeleccionadas() {
   if (contador) {
     contador.textContent = `Fotos seleccionadas: ${archivos.length}`;
   }
-}
-
-function mostrarVistaPrevia() {
-  const archivos = obtenerArchivosCartillas();
-  const listaArchivos = document.getElementById("listaArchivos");
-  const preview = document.querySelector(".preview");
-  const previewImagen = document.getElementById("previewImagen");
-
-  if (listaArchivos) {
-    listaArchivos.innerHTML = "";
-  }
-
-  if (!archivos || archivos.length === 0) {
-    if (preview) preview.style.display = "none";
-    if (previewImagen) previewImagen.src = "";
-    actualizarContadorFotosSeleccionadas();
-    return;
-  }
-
-  if (listaArchivos) {
-    archivos.forEach((archivo, index) => {
-      const item = document.createElement("div");
-      item.textContent = `${index + 1}. ${archivo.name}`;
-      listaArchivos.appendChild(item);
-    });
-  }
-
-  if (preview && previewImagen) {
-    const lector = new FileReader();
-
-    lector.onload = function(e) {
-      previewImagen.src = e.target.result;
-      preview.style.display = "block";
-    };
-
-    lector.readAsDataURL(archivos[0]);
-  }
-
-  actualizarContadorFotosSeleccionadas();
 }
 
 async function procesarYExportarExcel() {
@@ -2110,3 +2340,668 @@ function borrarFotosSeleccionadas() {
   actualizarContadorFotosSeleccionadas();
   mostrarVistaPrevia();
 }
+
+const GRUPOS_OFICIALES = [
+  "5to Primaria",
+  "6to Primaria",
+  "1ro Secundaria",
+  "2do Secundaria",
+  "3ro Secundaria",
+  "4to Secundaria",
+  "5to Secundaria",
+  "Círculo 1",
+  "Círculo 2"
+];
+
+function normalizarTextoArchivo(texto) {
+  return (texto || "Sin_nombre")
+    .toString()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^A-Za-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .substring(0, 80);
+}
+
+function obtenerNombreBaseExportacion() {
+  if (configuracionActivaRevision) {
+    const simulacro = normalizarTextoArchivo(configuracionActivaRevision.simulacro || "Simulacro");
+    const grupo = normalizarTextoArchivo(configuracionActivaRevision.grupo || "Grupo");
+    return `${simulacro}_${grupo}`;
+  }
+
+  return "resultados_cartillas";
+}
+
+function poblarSelectAdmin() {
+  const select = document.getElementById("adminGrupo");
+  if (!select) return;
+
+  select.innerHTML = "";
+
+  GRUPOS_OFICIALES.forEach(grupo => {
+    const option = document.createElement("option");
+    option.value = grupo;
+    option.textContent = grupo;
+    select.appendChild(option);
+  });
+}
+
+function mostrarPantalla(nombrePantalla) {
+  const inicio = document.getElementById("pantallaInicio");
+  const admin = document.getElementById("pantallaAdmin");
+  const revision = document.getElementById("pantallaRevision");
+
+  if (inicio) inicio.style.display = nombrePantalla === "inicio" ? "block" : "none";
+  if (admin) admin.style.display = nombrePantalla === "admin" ? "block" : "none";
+  if (revision) revision.style.display = nombrePantalla === "revision" ? "block" : "none";
+
+  if (nombrePantalla === "admin") {
+    poblarSelectAdmin();
+    cargarConfigAdminSeleccionada();
+    renderizarResumenAdmin();
+  }
+
+  if (nombrePantalla === "revision") {
+    renderizarBotonesRevision();
+  }
+}
+
+function cargarConfigAdminSeleccionada() {
+  const grupo = document.getElementById("adminGrupo")?.value;
+  const configs = obtenerConfiguracionesGuardadas();
+  const config = configs[grupo];
+
+  const simulacro = document.getElementById("adminSimulacro");
+  const clave = document.getElementById("adminClave");
+  const cursos = document.getElementById("adminCursos");
+
+  if (simulacro) simulacro.value = config?.simulacro || "";
+  if (clave) clave.value = Array.isArray(config?.clave) ? config.clave.join(" ") : "";
+  if (cursos) cursos.value = Array.isArray(config?.cursos) ? config.cursos.join("\n") : "";
+}
+
+function guardarConfigAdmin() {
+  const grupo = document.getElementById("adminGrupo")?.value;
+  const simulacro = document.getElementById("adminSimulacro")?.value.trim();
+  const claveTexto = document.getElementById("adminClave")?.value.trim().toUpperCase() || "";
+  const cursosTexto = document.getElementById("adminCursos")?.value.trim() || "";
+
+  const clave = claveTexto.split(/\s+/).filter(x => x !== "");
+  const cursos = cursosTexto.split(/\n|,/).map(x => x.trim()).filter(x => x !== "");
+
+  if (!grupo) {
+    alert("Selecciona un grupo.");
+    return;
+  }
+
+  if (!simulacro) {
+    alert("Escribe el nombre del simulacro.");
+    return;
+  }
+
+  if (clave.length === 0) {
+    alert("Pega la clave de respuestas.");
+    return;
+  }
+
+  const invalidas = clave.filter(x => !["A", "B", "C", "D", "E"].includes(x));
+  if (invalidas.length > 0) {
+    alert("La clave contiene respuestas inválidas. Solo usa A, B, C, D, E.");
+    return;
+  }
+
+  const gruposEsperados = Math.ceil(clave.length / 5);
+
+  if (cursos.length > 0 && cursos.length !== gruposEsperados) {
+    const continuar = confirm(
+      `La clave tiene ${clave.length} respuestas, por lo que se crearán ${gruposEsperados} grupos de 5.\n` +
+      `Pero ingresaste ${cursos.length} nombres de cursos/grupos.\n\n` +
+      `¿Deseas guardar de todos modos?`
+    );
+
+    if (!continuar) return;
+  }
+
+  const configs = obtenerConfiguracionesGuardadas();
+
+  configs[grupo] = {
+    grupo,
+    simulacro,
+    clave,
+    cursos,
+    preguntas: clave.length,
+    grupos: gruposEsperados,
+    actualizado: new Date().toISOString()
+  };
+
+  guardarConfiguraciones(configs);
+  renderizarResumenAdmin();
+
+  alert(`Clave guardada para ${grupo}.`);
+}
+
+function eliminarConfigAdmin() {
+  const grupo = document.getElementById("adminGrupo")?.value;
+  if (!grupo) return;
+
+  const confirmar = confirm(`¿Eliminar la clave guardada para ${grupo}?`);
+  if (!confirmar) return;
+
+  const configs = obtenerConfiguracionesGuardadas();
+  delete configs[grupo];
+  guardarConfiguraciones(configs);
+
+  cargarConfigAdminSeleccionada();
+  renderizarResumenAdmin();
+  alert("Configuración eliminada.");
+}
+
+function renderizarResumenAdmin() {
+  const contenedor = document.getElementById("adminResumen");
+  if (!contenedor) return;
+
+  const configs = obtenerConfiguracionesGuardadas();
+
+  let html = "<table><thead><tr><th>Grupo</th><th>Simulacro</th><th>Preguntas</th><th>Grupos</th><th>Estado</th></tr></thead><tbody>";
+
+  GRUPOS_OFICIALES.forEach(grupo => {
+    const c = configs[grupo];
+
+    html += `
+      <tr>
+        <td>${grupo}</td>
+        <td>${c?.simulacro || "-"}</td>
+        <td>${c?.preguntas || "-"}</td>
+        <td>${c?.grupos || "-"}</td>
+        <td>${c ? "Guardado" : "Pendiente"}</td>
+      </tr>
+    `;
+  });
+
+  html += "</tbody></table>";
+  contenedor.innerHTML = html;
+}
+
+function exportarConfiguracionesJSON() {
+  const configs = obtenerConfiguracionesGuardadas();
+  const blob = new Blob([JSON.stringify(configs, null, 2)], {
+    type: "application/json;charset=utf-8;"
+  });
+
+  const url = URL.createObjectURL(blob);
+  const enlace = document.createElement("a");
+  enlace.href = url;
+  enlace.download = "claves_corrector_cartillas.json";
+  enlace.click();
+  URL.revokeObjectURL(url);
+}
+
+function importarConfiguracionesJSON(event) {
+  const archivo = event.target.files && event.target.files[0];
+  if (!archivo) return;
+
+  const lector = new FileReader();
+
+  lector.onload = function(e) {
+    try {
+      const configs = JSON.parse(e.target.result);
+      guardarConfiguraciones(configs);
+      cargarConfigAdminSeleccionada();
+      renderizarResumenAdmin();
+      renderizarBotonesRevision();
+      alert("Configuraciones importadas correctamente.");
+    } catch (error) {
+      alert("No se pudo importar el archivo JSON.");
+    }
+
+    event.target.value = "";
+  };
+
+  lector.readAsText(archivo, "utf-8");
+}
+
+function renderizarBotonesRevision() {
+  const contenedor = document.getElementById("botonesRevision");
+  if (!contenedor) return;
+
+  const configs = obtenerConfiguracionesGuardadas();
+  contenedor.innerHTML = "";
+
+  GRUPOS_OFICIALES.forEach(grupo => {
+    const config = configs[grupo];
+
+    const boton = document.createElement("button");
+    boton.textContent = config ? grupo : `${grupo} (sin clave)`;
+    boton.disabled = !config;
+    boton.className = config ? "" : "btn-deshabilitado";
+    boton.onclick = () => seleccionarGrupoRevision(grupo);
+
+    contenedor.appendChild(boton);
+  });
+}
+
+function seleccionarGrupoRevision(grupo) {
+  const configs = obtenerConfiguracionesGuardadas();
+  const config = configs[grupo];
+
+  if (!config) {
+    alert("Este grupo todavía no tiene clave cargada en Admin.");
+    return;
+  }
+
+  configuracionActivaRevision = config;
+
+  const clave = document.getElementById("clave");
+  const nombresGrupos = document.getElementById("nombresGrupos");
+  const totalPreguntas = document.getElementById("totalPreguntas");
+  const info = document.getElementById("infoGrupoSeleccionado");
+
+  if (clave) clave.value = config.clave.join(" ");
+  if (nombresGrupos) nombresGrupos.value = (config.cursos || []).join("\n");
+  if (totalPreguntas) totalPreguntas.value = String(config.clave.length);
+
+  if (info) {
+    info.innerHTML = `
+      <strong>Grupo seleccionado:</strong> ${config.grupo}<br>
+      <strong>Simulacro:</strong> ${config.simulacro}<br>
+      <strong>Preguntas:</strong> ${config.clave.length}<br>
+      <strong>Grupos de 5:</strong> ${Math.ceil(config.clave.length / 5)}
+    `;
+  }
+
+  actualizarInfoClaveYGrupos();
+
+  const areaTrabajo = document.getElementById("areaTrabajoRevision");
+  if (areaTrabajo) areaTrabajo.style.display = "block";
+
+  limpiarSoloResultados();
+}
+
+function limpiarSoloResultados() {
+  resultados = [];
+  cartillasProcesadasPDF = [];
+
+  const estado = document.getElementById("estado");
+  if (estado) estado.textContent = "";
+
+  const tablaHead = document.querySelector("#tablaResultados thead");
+  const tablaBody = document.querySelector("#tablaResultados tbody");
+
+  if (tablaHead) tablaHead.innerHTML = "";
+  if (tablaBody) tablaBody.innerHTML = "";
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  poblarSelectAdmin();
+  renderizarBotonesRevision();
+
+  const adminGrupo = document.getElementById("adminGrupo");
+  if (adminGrupo) {
+    adminGrupo.addEventListener("change", cargarConfigAdminSeleccionada);
+  }
+});
+
+const CONFIGURACION_EXAMEN_CODIGO = {
+  simulacro: "Simulacro de prueba - 90 preguntas",
+
+  
+  grupos: {
+    "5to Primaria": {
+      clave: `
+A B C D E A B C D E
+A B C D E A B C D E
+A B C D E A B C D E
+A B C D E A B C D E
+A B C D E A B C D E
+A B C D E A B C D E
+A B C D E A B C D E
+A B C D E A B C D E
+A B C D E A B C D E
+      `,
+      cursos: `
+Comunicación
+Matemática
+Ciencia y Tecnología
+Personal Social
+Inglés
+Razonamiento Verbal
+Razonamiento Matemático
+Álgebra
+Geometría
+Aritmética
+Historia
+Geografía
+Biología
+Física
+Química
+Lenguaje
+Literatura
+Cultura General
+      `
+    },
+
+    "6to Primaria": {
+      clave: `
+B C D E A B C D E A
+B C D E A B C D E A
+B C D E A B C D E A
+B C D E A B C D E A
+B C D E A B C D E A
+B C D E A B C D E A
+B C D E A B C D E A
+B C D E A B C D E A
+B C D E A B C D E A
+      `,
+      cursos: `
+Comunicación
+Matemática
+Ciencia y Tecnología
+Personal Social
+Inglés
+Razonamiento Verbal
+Razonamiento Matemático
+Álgebra
+Geometría
+Aritmética
+Historia
+Geografía
+Biología
+Física
+Química
+Lenguaje
+Literatura
+Cultura General
+      `
+    },
+
+    "1ro Secundaria": {
+      clave: `
+C D E A B C D E A B
+C D E A B C D E A B
+C D E A B C D E A B
+C D E A B C D E A B
+C D E A B C D E A B
+C D E A B C D E A B
+C D E A B C D E A B
+C D E A B C D E A B
+C D E A B C D E A B
+      `,
+      cursos: `
+Comunicación
+Matemática
+Ciencia y Tecnología
+Personal Social
+Inglés
+Razonamiento Verbal
+Razonamiento Matemático
+Álgebra
+Geometría
+Aritmética
+Historia
+Geografía
+Biología
+Física
+Química
+Lenguaje
+Literatura
+Cultura General
+      `
+    },
+
+    "2do Secundaria": {
+      clave: `
+D E A B C D E A B C
+D E A B C D E A B C
+D E A B C D E A B C
+D E A B C D E A B C
+D E A B C D E A B C
+D E A B C D E A B C
+D E A B C D E A B C
+D E A B C D E A B C
+D E A B C D E A B C
+      `,
+      cursos: `
+Comunicación
+Matemática
+Ciencia y Tecnología
+Personal Social
+Inglés
+Razonamiento Verbal
+Razonamiento Matemático
+Álgebra
+Geometría
+Aritmética
+Historia
+Geografía
+Biología
+Física
+Química
+Lenguaje
+Literatura
+Cultura General
+      `
+    },
+
+    "3ro Secundaria": {
+      clave: `
+E A B C D E A B C D
+E A B C D E A B C D
+E A B C D E A B C D
+E A B C D E A B C D
+E A B C D E A B C D
+E A B C D E A B C D
+E A B C D E A B C D
+E A B C D E A B C D
+E A B C D E A B C D
+      `,
+      cursos: `
+Comunicación
+Matemática
+Ciencia y Tecnología
+Personal Social
+Inglés
+Razonamiento Verbal
+Razonamiento Matemático
+Álgebra
+Geometría
+Aritmética
+Historia
+Geografía
+Biología
+Física
+Química
+Lenguaje
+Literatura
+Cultura General
+      `
+    },
+
+    "4to Secundaria": {
+      clave: `
+A C E B D A C E B D
+A C E B D A C E B D
+A C E B D A C E B D
+A C E B D A C E B D
+A C E B D A C E B D
+A C E B D A C E B D
+A C E B D A C E B D
+A C E B D A C E B D
+A C E B D A C E B D
+      `,
+      cursos: `
+Comunicación
+Matemática
+Ciencia y Tecnología
+Personal Social
+Inglés
+Razonamiento Verbal
+Razonamiento Matemático
+Álgebra
+Geometría
+Aritmética
+Historia
+Geografía
+Biología
+Física
+Química
+Lenguaje
+Literatura
+Cultura General
+      `
+    },
+
+    "5to Secundaria": {
+      clave: `
+B D A E C B D A E C
+B D A E C B D A E C
+B D A E C B D A E C
+B D A E C B D A E C
+B D A E C B D A E C
+B D A E C B D A E C
+B D A E C B D A E C
+B D A E C B D A E C
+B D A E C B D A E C
+      `,
+      cursos: `
+Comunicación
+Matemática
+Ciencia y Tecnología
+Personal Social
+Inglés
+Razonamiento Verbal
+Razonamiento Matemático
+Álgebra
+Geometría
+Aritmética
+Historia
+Geografía
+Biología
+Física
+Química
+Lenguaje
+Literatura
+Cultura General
+      `
+    },
+
+    "Círculo 1": {
+      clave: `
+C A D B E C A D B E
+C A D B E C A D B E
+C A D B E C A D B E
+C A D B E C A D B E
+C A D B E C A D B E
+C A D B E C A D B E
+C A D B E C A D B E
+C A D B E C A D B E
+C A D B E C A D B E
+      `,
+      cursos: `
+Comunicación
+Matemática
+Ciencia y Tecnología
+Personal Social
+Inglés
+Razonamiento Verbal
+Razonamiento Matemático
+Álgebra
+Geometría
+Aritmética
+Historia
+Geografía
+Biología
+Física
+Química
+Lenguaje
+Literatura
+Cultura General
+      `
+    },
+
+    "Círculo 2": {
+      clave: `
+E C A D B E C A D B
+E C A D B E C A D B
+E C A D B E C A D B
+E C A D B E C A D B
+E C A D B E C A D B
+E C A D B E C A D B
+E C A D B E C A D B
+E C A D B E C A D B
+E C A D B E C A D B
+      `,
+      cursos: `
+Comunicación
+Matemática
+Ciencia y Tecnología
+Personal Social
+Inglés
+Razonamiento Verbal
+Razonamiento Matemático
+Álgebra
+Geometría
+Aritmética
+Historia
+Geografía
+Biología
+Física
+Química
+Lenguaje
+Literatura
+Cultura General
+      `
+    }
+  }
+};
+
+function convertirTextoClaveAArray(texto) {
+  return (texto || "")
+    .trim()
+    .toUpperCase()
+    .split(/\s+/)
+    .filter(x => x !== "");
+}
+
+function convertirTextoCursosAArray(texto) {
+  return (texto || "")
+    .trim()
+    .split(/\n|,/)
+    .map(x => x.trim())
+    .filter(x => x !== "");
+}
+
+function obtenerConfiguracionesGuardadas() {
+  const configs = {};
+
+  GRUPOS_OFICIALES.forEach(grupo => {
+    const data = CONFIGURACION_EXAMEN_CODIGO.grupos[grupo];
+
+    if (!data) return;
+
+    const clave = convertirTextoClaveAArray(data.clave);
+    const cursos = convertirTextoCursosAArray(data.cursos);
+
+    if (clave.length === 0) return;
+
+    configs[grupo] = {
+      grupo,
+      simulacro: CONFIGURACION_EXAMEN_CODIGO.simulacro,
+      clave,
+      cursos,
+      preguntas: clave.length,
+      grupos: Math.ceil(clave.length / 5),
+      actualizado: "configurado_en_codigo"
+    };
+  });
+
+  return configs;
+}
+
+function guardarConfiguraciones() {
+  alert("En esta versión las claves se actualizan directamente en el código.");
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  renderizarBotonesRevision();
+});
