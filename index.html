@@ -9,6 +9,26 @@
   <link rel="stylesheet" href="style.css" />
 
   <style>
+    .botones-grupos {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .btn-deshabilitado {
+      background: #9ca3af !important;
+      cursor: not-allowed;
+    }
+
+    .badge-info {
+      background: #eef2ff;
+      border: 1px solid #c7d2fe;
+      padding: 12px;
+      border-radius: 12px;
+      margin: 12px 0;
+    }
+
     .preview-controles {
       display: flex;
       gap: 12px;
@@ -38,161 +58,174 @@
       display: block;
       margin: 0 auto;
     }
-  </style>
 
+    .ayuda {
+      font-size: 0.92rem;
+      color: #4b5563;
+      margin-top: 8px;
+    }
+
+    .acciones-principales button {
+      width: 100%;
+      margin: 7px 0;
+    }
+
+    @media (min-width: 700px) {
+      .acciones-principales {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+      }
+
+      .acciones-principales button {
+        width: auto;
+      }
+    }
+  </style>
 </head>
 
 <body>
   <div class="app">
     <header class="header">
       <h1>Corrector de Cartillas</h1>
-      <p>Selecciona fotos de cartillas, corrige automáticamente y exporta a Excel</p>
-      <p id="estadoOpenCV">Cargando detector de imagen...</p>
+      <p>Elige el grupo, selecciona fotos y descarga los resultados.</p>
+      <p id="estadoOpenCV">Cargando sistema de lectura...</p>
     </header>
 
-    <!-- Configuración fija -->
-    <input id="totalPreguntas" type="hidden" value="100" />
+    
+    <input id="totalPreguntas" type="hidden" value="90" />
     <input id="tamanoGrupo" type="hidden" value="5" />
 
     <select id="alternativas" style="display:none;">
       <option value="ABCDE" selected>A - B - C - D - E</option>
     </select>
 
-    <!-- Elementos ocultos usados internamente por el script -->
+    
     <video id="videoEscaner" autoplay playsinline muted style="display:none;"></video>
     <canvas id="canvasEscaner" style="display:none;"></canvas>
     <canvas id="canvasDebug" style="display:none;"></canvas>
     <canvas id="canvasAlineado" style="display:none;"></canvas>
     <textarea id="respuestasDetectadas" style="display:none;"></textarea>
+    <textarea id="clave" style="display:none;"></textarea>
+    <textarea id="nombresGrupos" style="display:none;"></textarea>
+    <p id="infoClaveGrupos" style="display:none;"></p>
     <p id="estadoEscaneoAuto" style="display:none;"></p>
     <p id="contadorEscaneoAuto" style="display:none;"></p>
 
     <section class="card">
-      <h2>1. Clave de respuestas</h2>
+      <h2>1. Elige el grupo</h2>
+      <p class="ayuda">La clave se cargará automáticamente.</p>
 
-      <p>
-        Pega la clave de las 100 preguntas separada por espacios.
-        Ejemplo: <strong>A B C D E A B C D E</strong>
-      </p>
+      <div id="botonesRevision" class="botones-grupos"></div>
 
-      <textarea
-        id="clave"
-        rows="7"
-        placeholder="A B C D E A B C D E..."
-        oninput="actualizarInfoClaveYGrupos()"
-      ></textarea>
-
-      <p id="infoClaveGrupos">Clave detectada: 0 respuestas.</p>
+      <div id="infoGrupoSeleccionado" class="badge-info">
+        Todavía no has seleccionado un grupo.
+      </div>
     </section>
 
-    <section class="card">
-      <h2>2. Nombres de grupos / cursos</h2>
+    <div id="areaTrabajoRevision" style="display:none;">
+      <section class="card">
+        <h2>2. Selecciona las fotos</h2>
+        <p class="ayuda">
+          Selecciona las fotos de las cartillas. El orden será el mismo en el Excel y en el PDF.
+        </p>
 
-      <p>
-        Escribe los nombres de los cursos o grupos en orden, uno por línea.
-        Cada nombre corresponde a un grupo de 5 preguntas.
-        Si tu clave tiene 90 respuestas, se crearán 18 grupos.
-      </p>
+        <button onclick="abrirSelectorFotos()">
+          Seleccionar fotos
+        </button>
 
-      <textarea
-        id="nombresGrupos"
-        rows="6"
-        placeholder="Ejemplo:
-Comunicación
-Matemática
-Ciencia
-Historia
-Inglés..."
-      ></textarea>
-    </section>
+        <input
+          id="cartillas"
+          type="file"
+          accept="image/*"
+          multiple
+          onchange="mostrarVistaPrevia()"
+          style="display:none;"
+        />
 
-    <section class="card">
-      <h2>3. Seleccionar fotos de cartillas</h2>
+        <p id="contadorFotosSeleccionadas">Fotos seleccionadas: 0</p>
 
-      <p>
-        Toma las fotos con la cámara normal del celular. Luego selecciona todas aquí.
-        La app las procesará en el mismo orden en que fueron seleccionadas.
-      </p>
+        <button onclick="borrarFotosSeleccionadas()" class="btn-secundario">
+          Quitar todas
+        </button>
 
-      <input
-        id="cartillas"
-        type="file"
-        accept="image/*"
-        multiple
-        onchange="mostrarVistaPrevia()"
-      />
+        <button onclick="eliminarFotoActual()" class="btn-secundario">
+          Eliminar foto actual
+        </button>
 
-      <p id="contadorFotosSeleccionadas">Fotos seleccionadas: 0</p>
+        <div id="listaArchivos"></div>
 
-      <button onclick="borrarFotosSeleccionadas()" class="btn-secundario">
-        Quitar fotos seleccionadas
-      </button>
+        <div class="preview" style="display:none;">
+          <h3>Revisar fotos seleccionadas</h3>
 
-      <div id="listaArchivos"></div>
+          <div class="preview-controles">
+            <button type="button" onclick="cambiarPreviewFoto(-1)" class="btn-secundario">
+              ← Anterior
+            </button>
 
-      <div class="preview" style="display:none;">
-        <h3>Fotos seleccionadas</h3>
+            <span id="indicadorPreview">0 / 0</span>
 
-        <div class="preview-controles">
-          <button type="button" onclick="cambiarPreviewFoto(-1)" class="btn-secundario">
-            ← Anterior
+            <button type="button" onclick="cambiarPreviewFoto(1)" class="btn-secundario">
+              Siguiente →
+            </button>
+          </div>
+
+          <p id="nombrePreview"></p>
+
+          <img id="previewImagen" alt="Vista previa de cartilla" />
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>3. Procesa y descarga</h2>
+
+        <div class="acciones-principales">
+          <button onclick="procesarCartillas()">
+            Procesar cartillas
           </button>
 
-          <span id="indicadorPreview">0 / 0</span>
+          <button onclick="exportarExcel()">
+            Descargar Excel
+          </button>
 
-          <button type="button" onclick="cambiarPreviewFoto(1)" class="btn-secundario">
-            Siguiente →
+          <button onclick="descargarPDFEscaneos()">
+            Descargar PDF
           </button>
         </div>
 
-        <p id="nombrePreview"></p>
+        <button onclick="limpiarTodo()" class="btn-secundario">
+          Limpiar todo
+        </button>
 
-        <img id="previewImagen" alt="Vista previa de cartilla" />
-      </div>
-    </section>
+        <p id="estado"></p>
+      </section>
 
-    <section class="card">
-      <h2>4. Procesar y descargar</h2>
+      <section class="card">
+        <h2>4. Resultados</h2>
+        <p class="ayuda">
+          El Excel incluye el recorte del nombre escrito.
+        </p>
 
-      <button onclick="procesarCartillas()">
-        Leer cartillas
-      </button>
-
-      <button onclick="exportarExcel()">
-        Descargar Excel
-      </button>
-
-      <button onclick="descargarPDFEscaneos()">
-        Descargar PDF de cartillas procesadas
-      </button>
-
-      <button onclick="limpiarTodo()" class="btn-secundario">
-        Limpiar todo
-      </button>
-
-      <p id="estado"></p>
-    </section>
-
-    <section class="card">
-      <h2>5. Resultados</h2>
-      <p><strong>Importante:</strong> el número de orden del Excel coincide con el número de orden del PDF procesado. Usa ese orden para identificar a cada alumno. En el Excel se muestran Buenas, Malas y Blancas por separado.</p>
-
-      <div class="tabla-contenedor">
-        <table id="tablaResultados">
-          <thead></thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </section>
+        <div class="tabla-contenedor">
+          <table id="tablaResultados">
+            <thead></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
   </div>
 
-  <!-- PDF: permite descargar las cartillas procesadas como un solo PDF -->
+  
+  <script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
+
+  
   <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
 
-  <!-- Tu lógica de lectura -->
+  
   <script src="script.js"></script>
 
-  <!-- OpenCV para detección de cuadrados y cartilla -->
+  
   <script
     async
     src="https://docs.opencv.org/4.8.0/opencv.js"
